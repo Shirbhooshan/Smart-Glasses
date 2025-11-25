@@ -28,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var testButton: Button
     private lateinit var deviceSpinner: Spinner
     private lateinit var connectButton: Button
+    private lateinit var disconnectButton: Button
 
     private var deviceList = mutableListOf<BluetoothDevice>()
     private val PERMISSION_REQUEST_CODE = 1001
@@ -67,10 +68,16 @@ class MainActivity : AppCompatActivity() {
         testButton = findViewById(R.id.testButton)
         deviceSpinner = findViewById(R.id.deviceSpinner)
         connectButton = findViewById(R.id.connectButton)
+        disconnectButton = findViewById(R.id.disconnectButton)
 
         scanButton.setOnClickListener { startDeviceScan() }
         testButton.setOnClickListener { sendTestMessage() }
         connectButton.setOnClickListener { connectToSelectedDevice() }
+        disconnectButton.setOnClickListener { disconnectDevice() }
+
+        // Initially disable buttons
+        disconnectButton.isEnabled = false
+        testButton.isEnabled = false
     }
 
     private fun setupBluetoothAdapter() {
@@ -78,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         bluetoothAdapter = bluetoothManager.adapter
 
         if (bluetoothAdapter == null) {
-            showDialog("Bluetooth Not Supported", "Your device doesn't support Bluetooth. We're sorry, but this app won't work on this device.")
+            showDialog("Bluetooth Not Supported", "Your device doesn't support Bluetooth.")
             finish()
         }
     }
@@ -86,7 +93,6 @@ class MainActivity : AppCompatActivity() {
     private fun checkAndRequestPermissions() {
         val permissionsNeeded = mutableListOf<String>()
 
-        // Bluetooth permissions
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -96,7 +102,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Phone permissions
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
             permissionsNeeded.add(Manifest.permission.READ_PHONE_STATE)
         }
@@ -107,7 +112,6 @@ class MainActivity : AppCompatActivity() {
             permissionsNeeded.add(Manifest.permission.READ_CONTACTS)
         }
 
-        // Notification permission (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -117,7 +121,7 @@ class MainActivity : AppCompatActivity() {
         if (permissionsNeeded.isNotEmpty()) {
             showDialog(
                 "Permissions Needed",
-                "This app needs a few permissions to work properly. We'll ask for them now. Don't worry, we only use them to send notifications to your glasses!",
+                "This app needs permissions to work properly.",
                 onPositive = {
                     ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), PERMISSION_REQUEST_CODE)
                 }
@@ -132,7 +136,7 @@ class MainActivity : AppCompatActivity() {
         if (enabled == null || !enabled.contains(packageName)) {
             showDialog(
                 "Notification Access Needed",
-                "We need access to your notifications to send them to your glasses. You'll be taken to settings to enable this. Just find 'Smart Glasses Bridge' and turn it on!",
+                "Please enable notification access for this app.",
                 onPositive = {
                     startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
                 }
@@ -150,7 +154,7 @@ class MainActivity : AppCompatActivity() {
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 showDialog(
                     "Battery Optimization",
-                    "To keep the app running smoothly in the background, we need to disable battery optimization. This helps ensure you don't miss any notifications!",
+                    "Please disable battery optimization to keep the app running.",
                     onPositive = {
                         intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
                         intent.data = android.net.Uri.parse("package:$packageName")
@@ -164,7 +168,7 @@ class MainActivity : AppCompatActivity() {
     private fun startDeviceScan() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Please grant Bluetooth permissions first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Please grant Bluetooth permissions", Toast.LENGTH_SHORT).show()
                 return
             }
         }
@@ -179,9 +183,9 @@ class MainActivity : AppCompatActivity() {
         deviceSpinner.adapter = adapter
 
         if (deviceList.isEmpty()) {
-            Toast.makeText(this, "No paired devices found. Please pair your ESP32 in Bluetooth settings first.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No paired devices found. Please pair ESP32 in Bluetooth settings.", Toast.LENGTH_LONG).show()
         } else {
-            Toast.makeText(this, "Found ${deviceList.size} paired device(s)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Found ${deviceList.size} device(s)", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -189,19 +193,28 @@ class MainActivity : AppCompatActivity() {
         val position = deviceSpinner.selectedItemPosition
         if (position >= 0 && position < deviceList.size) {
             val device = deviceList[position]
+
             val intent = Intent(this, BluetoothService::class.java)
             intent.action = BluetoothService.ACTION_CONNECT
             intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
             startForegroundService(intent)
 
-            // Save device address
             val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
             prefs.edit().putString("device_address", device.address).apply()
+            prefs.edit().putString("device_name", device.name).apply()
 
             Toast.makeText(this, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(this, "Please select a device first", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun disconnectDevice() {
+        val intent = Intent(this, BluetoothService::class.java)
+        intent.action = BluetoothService.ACTION_DISCONNECT
+        startService(intent)
+
+        Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show()
     }
 
     private fun sendTestMessage() {
@@ -215,21 +228,29 @@ class MainActivity : AppCompatActivity() {
                 BluetoothService.STATE_CONNECTED -> {
                     statusText.text = "🔵 Connected"
                     statusText.setTextColor(getColor(R.color.connected_color))
+
                     val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
-                    val deviceAddress = prefs.getString("device_address", "Unknown")
-                    connectedDeviceText.text = "Device: $deviceAddress"
+                    val deviceName = prefs.getString("device_name", "ESP32_Glasses")
+                    connectedDeviceText.text = "Device: $deviceName"
+
                     testButton.isEnabled = true
+                    disconnectButton.isEnabled = true
+                    connectButton.isEnabled = false
                 }
                 BluetoothService.STATE_CONNECTING -> {
                     statusText.text = "🔄 Connecting..."
                     statusText.setTextColor(getColor(R.color.connecting_color))
                     testButton.isEnabled = false
+                    disconnectButton.isEnabled = false
+                    connectButton.isEnabled = false
                 }
                 else -> {
                     statusText.text = "⚪ Disconnected"
                     statusText.setTextColor(getColor(R.color.disconnected_color))
                     connectedDeviceText.text = "No device connected"
                     testButton.isEnabled = false
+                    disconnectButton.isEnabled = false
+                    connectButton.isEnabled = true
                 }
             }
         }
@@ -256,7 +277,7 @@ class MainActivity : AppCompatActivity() {
             if (allGranted) {
                 checkNotificationAccess()
             } else {
-                Toast.makeText(this, "Some permissions were denied. The app may not work properly.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Some permissions were denied.", Toast.LENGTH_LONG).show()
             }
         }
     }
