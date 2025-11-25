@@ -59,7 +59,7 @@ class BluetoothService : Service() {
         bluetoothAdapter = bluetoothManager.adapter
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification("Service Started", "Ready to connect"))
+        startForeground(NOTIFICATION_ID, createNotification("Ready", "Tap to open app"))
 
         startMessageSender()
     }
@@ -87,6 +87,7 @@ class BluetoothService : Service() {
     private fun connectToDevice(device: BluetoothDevice) {
         disconnect()
         broadcastState(STATE_CONNECTING)
+        updateNotification("Connecting...", "Connecting to ${device.name}")
 
         connectionThread = Thread {
             try {
@@ -103,37 +104,14 @@ class BluetoothService : Service() {
                 broadcastState(STATE_CONNECTED)
                 updateNotification("Connected", "Connected to ${device.name}")
 
-                startAutoReconnect(device)
-
             } catch (e: IOException) {
                 e.printStackTrace()
                 isConnected = false
                 broadcastState(STATE_DISCONNECTED)
-                updateNotification("Connection Failed", "Failed to connect to device")
-
-                Thread.sleep(5000)
-                connectToDevice(device)
+                updateNotification("Connection Failed", "Tap to retry")
             }
         }
         connectionThread?.start()
-    }
-
-    private fun startAutoReconnect(device: BluetoothDevice) {
-        Thread {
-            while (isConnected) {
-                try {
-                    Thread.sleep(1000)
-                    if (bluetoothSocket?.isConnected == false) {
-                        isConnected = false
-                        broadcastState(STATE_DISCONNECTED)
-                        connectToDevice(device)
-                        break
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }.start()
     }
 
     private fun disconnect() {
@@ -147,7 +125,7 @@ class BluetoothService : Service() {
         outputStream = null
         bluetoothSocket = null
         broadcastState(STATE_DISCONNECTED)
-        updateNotification("Disconnected", "Connection closed")
+        updateNotification("Disconnected", "Tap to open app")
     }
 
     private fun queueMessage(message: String) {
@@ -179,6 +157,7 @@ class BluetoothService : Service() {
                 e.printStackTrace()
                 isConnected = false
                 broadcastState(STATE_DISCONNECTED)
+                updateNotification("Disconnected", "Connection lost")
             }
         }
     }
@@ -196,7 +175,7 @@ class BluetoothService : Service() {
                 "Smart Glasses Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps Bluetooth connection active"
+                description = "Bluetooth connection status"
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
@@ -216,6 +195,7 @@ class BluetoothService : Service() {
             .setSmallIcon(R.drawable.ic_bluetooth)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
@@ -224,7 +204,8 @@ class BluetoothService : Service() {
         notificationManager.notify(NOTIFICATION_ID, createNotification(title, text))
     }
 
-    override fun onBind(intent:Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
