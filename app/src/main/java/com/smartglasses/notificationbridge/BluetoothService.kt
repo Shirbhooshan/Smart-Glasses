@@ -23,7 +23,6 @@ class BluetoothService : Service() {
     private var bluetoothSocket: BluetoothSocket? = null
     private var outputStream: OutputStream? = null
     private var connectionThread: Thread? = null
-    private var isConnected = false
     private val messageQueue = LinkedBlockingQueue<String>()
 
     companion object {
@@ -45,9 +44,14 @@ class BluetoothService : Service() {
         private const val CHANNEL_ID = "SmartGlassesService"
 
         private var instance: BluetoothService? = null
+        private var currentState = STATE_DISCONNECTED
 
         fun sendMessage(message: String) {
             instance?.queueMessage(message)
+        }
+
+        fun getCurrentState(): Int {
+            return currentState
         }
     }
 
@@ -86,12 +90,13 @@ class BluetoothService : Service() {
 
     private fun connectToDevice(device: BluetoothDevice) {
         disconnect()
-        broadcastState(STATE_CONNECTING)
+        setStateAndBroadcast(STATE_CONNECTING)
         updateNotification("Connecting...", "Connecting to ${device.name}")
 
         connectionThread = Thread {
             try {
                 if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                    setStateAndBroadcast(STATE_DISCONNECTED)
                     return@Thread
                 }
 
@@ -99,15 +104,13 @@ class BluetoothService : Service() {
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid)
                 bluetoothSocket?.connect()
                 outputStream = bluetoothSocket?.outputStream
-                isConnected = true
 
-                broadcastState(STATE_CONNECTED)
+                setStateAndBroadcast(STATE_CONNECTED)
                 updateNotification("Connected", "Connected to ${device.name}")
 
             } catch (e: IOException) {
                 e.printStackTrace()
-                isConnected = false
-                broadcastState(STATE_DISCONNECTED)
+                setStateAndBroadcast(STATE_DISCONNECTED)
                 updateNotification("Connection Failed", "Tap to retry")
             }
         }
@@ -115,7 +118,6 @@ class BluetoothService : Service() {
     }
 
     private fun disconnect() {
-        isConnected = false
         try {
             outputStream?.close()
             bluetoothSocket?.close()
@@ -124,8 +126,15 @@ class BluetoothService : Service() {
         }
         outputStream = null
         bluetoothSocket = null
-        broadcastState(STATE_DISCONNECTED)
+        setStateAndBroadcast(STATE_DISCONNECTED)
         updateNotification("Disconnected", "Tap to open app")
+    }
+
+    private fun setStateAndBroadcast(state: Int) {
+        currentState = state
+        val intent = Intent(ACTION_CONNECTION_STATE_CHANGED)
+        intent.putExtra(EXTRA_STATE, state)
+        sendBroadcast(intent)
     }
 
     private fun queueMessage(message: String) {
@@ -148,24 +157,17 @@ class BluetoothService : Service() {
     }
 
     private fun sendMessageNow(message: String) {
-        if (isConnected && outputStream != null) {
+        if (currentState == STATE_CONNECTED && outputStream != null) {
             try {
                 val data = "$message\n".toByteArray(Charsets.UTF_8)
                 outputStream?.write(data)
                 outputStream?.flush()
             } catch (e: IOException) {
                 e.printStackTrace()
-                isConnected = false
-                broadcastState(STATE_DISCONNECTED)
+                setStateAndBroadcast(STATE_DISCONNECTED)
                 updateNotification("Disconnected", "Connection lost")
             }
         }
-    }
-
-    private fun broadcastState(state: Int) {
-        val intent = Intent(ACTION_CONNECTION_STATE_CHANGED)
-        intent.putExtra(EXTRA_STATE, state)
-        sendBroadcast(intent)
     }
 
     private fun createNotificationChannel() {

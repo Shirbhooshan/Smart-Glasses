@@ -11,6 +11,8 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.*
@@ -32,13 +34,16 @@ class MainActivity : AppCompatActivity() {
 
     private var deviceList = mutableListOf<BluetoothDevice>()
     private val PERMISSION_REQUEST_CODE = 1001
+    private val handler = Handler(Looper.getMainLooper())
 
     private val connectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 BluetoothService.ACTION_CONNECTION_STATE_CHANGED -> {
                     val state = intent.getIntExtra(BluetoothService.EXTRA_STATE, BluetoothService.STATE_DISCONNECTED)
-                    updateConnectionStatus(state)
+                    handler.post {
+                        updateConnectionStatus(state)
+                    }
                 }
             }
         }
@@ -59,6 +64,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             registerReceiver(connectionReceiver, filter)
         }
+
+        // Check current connection state
+        checkCurrentConnectionState()
     }
 
     private fun initializeViews() {
@@ -75,9 +83,8 @@ class MainActivity : AppCompatActivity() {
         connectButton.setOnClickListener { connectToSelectedDevice() }
         disconnectButton.setOnClickListener { disconnectDevice() }
 
-        // Initially disable buttons
-        disconnectButton.isEnabled = false
-        testButton.isEnabled = false
+        // Set initial state
+        updateConnectionStatus(BluetoothService.STATE_DISCONNECTED)
     }
 
     private fun setupBluetoothAdapter() {
@@ -88,6 +95,14 @@ class MainActivity : AppCompatActivity() {
             showDialog("Bluetooth Not Supported", "Your device doesn't support Bluetooth.")
             finish()
         }
+    }
+
+    private fun checkCurrentConnectionState() {
+        // Poll for current state after a short delay
+        handler.postDelayed({
+            val state = BluetoothService.getCurrentState()
+            updateConnectionStatus(state)
+        }, 500)
     }
 
     private fun checkAndRequestPermissions() {
@@ -194,6 +209,9 @@ class MainActivity : AppCompatActivity() {
         if (position >= 0 && position < deviceList.size) {
             val device = deviceList[position]
 
+            // Show connecting immediately
+            updateConnectionStatus(BluetoothService.STATE_CONNECTING)
+
             val intent = Intent(this, BluetoothService::class.java)
             intent.action = BluetoothService.ACTION_CONNECT
             intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
@@ -210,11 +228,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun disconnectDevice() {
+        // Show disconnected immediately
+        updateConnectionStatus(BluetoothService.STATE_DISCONNECTED)
+
         val intent = Intent(this, BluetoothService::class.java)
         intent.action = BluetoothService.ACTION_DISCONNECT
         startService(intent)
 
-        Toast.makeText(this, "Disconnecting...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show()
     }
 
     private fun sendTestMessage() {
@@ -223,35 +244,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateConnectionStatus(state: Int) {
-        runOnUiThread {
-            when (state) {
-                BluetoothService.STATE_CONNECTED -> {
-                    statusText.text = "🔵 Connected"
-                    statusText.setTextColor(getColor(R.color.connected_color))
+        when (state) {
+            BluetoothService.STATE_CONNECTED -> {
+                // CONNECTED - GREEN
+                statusText.text = "🔵 Connected"
+                statusText.setTextColor(ContextCompat.getColor(this, R.color.connected_color))
 
-                    val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
-                    val deviceName = prefs.getString("device_name", "ESP32_Glasses")
-                    connectedDeviceText.text = "Device: $deviceName"
+                val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
+                val deviceName = prefs.getString("device_name", "ESP32_Glasses") ?: "ESP32_Glasses"
+                connectedDeviceText.text = "Device: $deviceName"
 
-                    testButton.isEnabled = true
-                    disconnectButton.isEnabled = true
-                    connectButton.isEnabled = false
-                }
-                BluetoothService.STATE_CONNECTING -> {
-                    statusText.text = "🔄 Connecting..."
-                    statusText.setTextColor(getColor(R.color.connecting_color))
-                    testButton.isEnabled = false
-                    disconnectButton.isEnabled = false
-                    connectButton.isEnabled = false
-                }
-                else -> {
-                    statusText.text = "⚪ Disconnected"
-                    statusText.setTextColor(getColor(R.color.disconnected_color))
-                    connectedDeviceText.text = "No device connected"
-                    testButton.isEnabled = false
-                    disconnectButton.isEnabled = false
-                    connectButton.isEnabled = true
-                }
+                testButton.isEnabled = true
+                disconnectButton.isEnabled = true
+                connectButton.isEnabled = false
+
+                // Change button colors
+                connectButton.alpha = 0.5f
+                disconnectButton.alpha = 1.0f
+            }
+            BluetoothService.STATE_CONNECTING -> {
+                // CONNECTING - ORANGE
+                statusText.text = "🔄 Connecting..."
+                statusText.setTextColor(ContextCompat.getColor(this, R.color.connecting_color))
+                connectedDeviceText.text = "Please wait..."
+
+                testButton.isEnabled = false
+                disconnectButton.isEnabled = false
+                connectButton.isEnabled = false
+
+                connectButton.alpha = 0.5f
+                disconnectButton.alpha = 0.5f
+            }
+            else -> {
+                // DISCONNECTED - GREY
+                statusText.text = "⚪ Disconnected"
+                statusText.setTextColor(ContextCompat.getColor(this, R.color.disconnected_color))
+                connectedDeviceText.text = "No device connected"
+
+                testButton.isEnabled = false
+                disconnectButton.isEnabled = false
+                connectButton.isEnabled = true
+
+                connectButton.alpha = 1.0f
+                disconnectButton.alpha = 0.5f
             }
         }
     }
@@ -265,9 +300,19 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Check state when returning to app
+        checkCurrentConnectionState()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(connectionReceiver)
+        try {
+            unregisterReceiver(connectionReceiver)
+        } catch (e: Exception) {
+            // Already unregistered
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
