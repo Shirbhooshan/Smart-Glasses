@@ -326,4 +326,35 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun connectToSelectedDevice() {
+        val position = deviceSpinner.selectedItemPosition
+        if (position >= 0 && position < deviceList.size) {
+            val device = deviceList[position]
+
+            // Force close any existing connections
+            try {
+                val method = BluetoothAdapter::class.java.getMethod("cancelDiscovery")
+                method.invoke(bluetoothAdapter)
+            } catch (e: Exception) {
+                // Ignore
+            }
+
+            // Small delay
+            Handler(Looper.getMainLooper()).postDelayed({
+                updateConnectionStatus(BluetoothService.STATE_CONNECTING)
+
+                val intent = Intent(this, BluetoothService::class.java)
+                intent.action = BluetoothService.ACTION_CONNECT
+                intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
+                startForegroundService(intent)
+
+                val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
+                prefs.edit().putString("device_address", device.address).apply()
+                prefs.edit().putString("device_name", device.name).apply()
+
+                Toast.makeText(this, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
+            }, 500)
+        }
+    }
 }

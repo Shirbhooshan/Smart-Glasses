@@ -90,6 +90,8 @@ class BluetoothService : Service() {
 
     private fun connectToDevice(device: BluetoothDevice) {
         disconnect()
+        Thread.sleep(100)  // ← Added: Small delay
+
         setStateAndBroadcast(STATE_CONNECTING)
         updateNotification("Connecting...", "Connecting to ${device.name}")
 
@@ -102,7 +104,21 @@ class BluetoothService : Service() {
 
                 val uuid = UUID.fromString(SPP_UUID)
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid)
-                bluetoothSocket?.connect()
+
+                try {
+                    bluetoothSocket?.connect()
+                } catch (e: IOException) {
+                    // ← Added: Fallback connection method
+                    try {
+                        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                        bluetoothSocket?.close()
+                        bluetoothSocket = method.invoke(device, 1) as BluetoothSocket
+                        bluetoothSocket?.connect()
+                    } catch (e2: Exception) {
+                        throw e
+                    }
+                }
+
                 outputStream = bluetoothSocket?.outputStream
 
                 setStateAndBroadcast(STATE_CONNECTED)
