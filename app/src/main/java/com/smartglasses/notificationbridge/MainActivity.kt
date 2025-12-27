@@ -98,7 +98,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkCurrentConnectionState() {
-        // Poll for current state after a short delay
         handler.postDelayed({
             val state = BluetoothService.getCurrentState()
             updateConnectionStatus(state)
@@ -209,26 +208,35 @@ class MainActivity : AppCompatActivity() {
         if (position >= 0 && position < deviceList.size) {
             val device = deviceList[position]
 
-            // Show connecting immediately
-            updateConnectionStatus(BluetoothService.STATE_CONNECTING)
+            // Force close any existing connections
+            try {
+                val method = BluetoothAdapter::class.java.getMethod("cancelDiscovery")
+                method.invoke(bluetoothAdapter)
+            } catch (e: Exception) {
+                // Ignore
+            }
 
-            val intent = Intent(this, BluetoothService::class.java)
-            intent.action = BluetoothService.ACTION_CONNECT
-            intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
-            startForegroundService(intent)
+            // Small delay before connecting
+            handler.postDelayed({
+                updateConnectionStatus(BluetoothService.STATE_CONNECTING)
 
-            val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
-            prefs.edit().putString("device_address", device.address).apply()
-            prefs.edit().putString("device_name", device.name).apply()
+                val intent = Intent(this, BluetoothService::class.java)
+                intent.action = BluetoothService.ACTION_CONNECT
+                intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
+                startForegroundService(intent)
 
-            Toast.makeText(this, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
+                val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
+                prefs.edit().putString("device_address", device.address).apply()
+                prefs.edit().putString("device_name", device.name).apply()
+
+                Toast.makeText(this, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
+            }, 500)
         } else {
             Toast.makeText(this, "Please select a device first", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun disconnectDevice() {
-        // Show disconnected immediately
         updateConnectionStatus(BluetoothService.STATE_DISCONNECTED)
 
         val intent = Intent(this, BluetoothService::class.java)
@@ -246,7 +254,6 @@ class MainActivity : AppCompatActivity() {
     private fun updateConnectionStatus(state: Int) {
         when (state) {
             BluetoothService.STATE_CONNECTED -> {
-                // CONNECTED - GREEN
                 statusText.text = "🔵 Connected"
                 statusText.setTextColor(ContextCompat.getColor(this, R.color.connected_color))
 
@@ -258,12 +265,10 @@ class MainActivity : AppCompatActivity() {
                 disconnectButton.isEnabled = true
                 connectButton.isEnabled = false
 
-                // Change button colors
                 connectButton.alpha = 0.5f
                 disconnectButton.alpha = 1.0f
             }
             BluetoothService.STATE_CONNECTING -> {
-                // CONNECTING - ORANGE
                 statusText.text = "🔄 Connecting..."
                 statusText.setTextColor(ContextCompat.getColor(this, R.color.connecting_color))
                 connectedDeviceText.text = "Please wait..."
@@ -276,7 +281,6 @@ class MainActivity : AppCompatActivity() {
                 disconnectButton.alpha = 0.5f
             }
             else -> {
-                // DISCONNECTED - GREY
                 statusText.text = "⚪ Disconnected"
                 statusText.setTextColor(ContextCompat.getColor(this, R.color.disconnected_color))
                 connectedDeviceText.text = "No device connected"
@@ -302,7 +306,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Check state when returning to app
         checkCurrentConnectionState()
     }
 
@@ -324,37 +327,6 @@ class MainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, "Some permissions were denied.", Toast.LENGTH_LONG).show()
             }
-        }
-    }
-
-    private fun connectToSelectedDevice() {
-        val position = deviceSpinner.selectedItemPosition
-        if (position >= 0 && position < deviceList.size) {
-            val device = deviceList[position]
-
-            // Force close any existing connections
-            try {
-                val method = BluetoothAdapter::class.java.getMethod("cancelDiscovery")
-                method.invoke(bluetoothAdapter)
-            } catch (e: Exception) {
-                // Ignore
-            }
-
-            // Small delay
-            Handler(Looper.getMainLooper()).postDelayed({
-                updateConnectionStatus(BluetoothService.STATE_CONNECTING)
-
-                val intent = Intent(this, BluetoothService::class.java)
-                intent.action = BluetoothService.ACTION_CONNECT
-                intent.putExtra(BluetoothService.EXTRA_DEVICE, device)
-                startForegroundService(intent)
-
-                val prefs = getSharedPreferences("SmartGlasses", Context.MODE_PRIVATE)
-                prefs.edit().putString("device_address", device.address).apply()
-                prefs.edit().putString("device_name", device.name).apply()
-
-                Toast.makeText(this, "Connecting to ${device.name}...", Toast.LENGTH_SHORT).show()
-            }, 500)
         }
     }
 }
