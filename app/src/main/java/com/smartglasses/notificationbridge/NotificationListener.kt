@@ -26,20 +26,25 @@ class NotificationListener : NotificationListenerService() {
                 return
             }
 
-            // Determine message type
+            // Determine message type and format properly
             val message = when {
                 isMessagingApp(packageName) && text.isNotEmpty() -> {
-                    "MSG: $appName: $text"
+                    // Format: MSG:AppName:MessageText (NO SPACES after colons)
+                    "MSG:$appName:$text"
                 }
                 title.isNotEmpty() -> {
-                    "NOTIF: $appName: $title"
+                    // Format: NOTIF:AppName:Title (NO SPACES after colons)
+                    "NOTIF:$appName:$title"
                 }
                 else -> {
-                    "NOTIF: $appName: New notification"
+                    "NOTIF:$appName:New notification"
                 }
             }
 
             Log.d(TAG, "Sending notification: $message")
+            Log.d(TAG, "Message length: ${message.length}")
+            Log.d(TAG, "Message bytes: ${message.toByteArray().joinToString(" ")}")
+
             BluetoothService.sendMessage(message)
 
         } catch (e: Exception) {
@@ -54,9 +59,11 @@ class NotificationListener : NotificationListenerService() {
     private fun getAppName(packageName: String): String {
         return try {
             val appInfo = packageManager.getApplicationInfo(packageName, 0)
-            packageManager.getApplicationLabel(appInfo).toString()
+            val name = packageManager.getApplicationLabel(appInfo).toString()
+            // Remove any spaces or special characters that might cause issues
+            name.replace(" ", "_").replace(":", "")
         } catch (e: Exception) {
-            packageName
+            packageName.replace(" ", "_").replace(":", "")
         }
     }
 

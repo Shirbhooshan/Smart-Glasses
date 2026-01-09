@@ -1,4 +1,3 @@
-
 package com.smartglasses.notificationbridge
 
 import android.content.BroadcastReceiver
@@ -8,9 +7,14 @@ import android.content.pm.PackageManager
 import android.database.Cursor
 import android.provider.ContactsContract
 import android.telephony.TelephonyManager
+import android.util.Log
 import androidx.core.app.ActivityCompat
 
 class PhoneStateReceiver : BroadcastReceiver() {
+
+    companion object {
+        private const val TAG = "PhoneStateReceiver"
+    }
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
@@ -20,7 +24,13 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 val incomingNumber = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
                 val contactName = getContactName(context, incomingNumber)
 
-                val message = "CALL: ${contactName ?: incomingNumber ?: "Unknown"}"
+                // Format: CALL:ContactName or CALL:PhoneNumber (NO SPACE after colon)
+                val caller = contactName ?: incomingNumber ?: "Unknown"
+                val message = "CALL:$caller"
+
+                Log.d(TAG, "Sending call notification: $message")
+                Log.d(TAG, "Message length: ${message.length}")
+
                 BluetoothService.sendMessage(message)
             }
         }
@@ -50,6 +60,8 @@ class PhoneStateReceiver : BroadcastReceiver() {
         cursor?.use {
             if (it.moveToFirst()) {
                 contactName = it.getString(it.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                // Remove any problematic characters
+                contactName = contactName?.replace(":", "")?.replace("\n", " ")
             }
         }
 
