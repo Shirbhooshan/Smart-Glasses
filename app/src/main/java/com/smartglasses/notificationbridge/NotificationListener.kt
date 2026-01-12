@@ -45,7 +45,7 @@ class NotificationListener : NotificationListenerService() {
             Log.d(TAG, "Message length: ${message.length}")
             Log.d(TAG, "Message bytes: ${message.toByteArray().joinToString(" ")}")
 
-            BluetoothService.sendMessage(message)
+            BluetoothService.sendMessage("$message\n")
 
         } catch (e: Exception) {
             Log.e(TAG, "Error processing notification", e)
