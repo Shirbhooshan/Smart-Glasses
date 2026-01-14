@@ -10,9 +10,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
@@ -22,10 +24,14 @@ class BluetoothService : Service() {
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothSocket: BluetoothSocket? = null
     private var outputStream: OutputStream? = null
+    private var inputStream: InputStream? = null
     private var connectionThread: Thread? = null
+    private var readerThread: Thread? = null
     private val messageQueue = LinkedBlockingQueue<String>()
 
     companion object {
+        private const val TAG = "BluetoothService"
+
         const val ACTION_CONNECT = "com.smartglasses.ACTION_CONNECT"
         const val ACTION_DISCONNECT = "com.smartglasses.ACTION_DISCONNECT"
         const val ACTION_SEND_MESSAGE = "com.smartglasses.ACTION_SEND_MESSAGE"
@@ -66,6 +72,7 @@ class BluetoothService : Service() {
         startForeground(NOTIFICATION_ID, createNotification("Ready", "Tap to open app"))
 
         startMessageSender()
+        Log.d(TAG, "BluetoothService created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -89,65 +96,200 @@ class BluetoothService : Service() {
     }
 
     private fun connectToDevice(device: BluetoothDevice) {
+        Log.d(TAG, "\n========================================")
+        Log.d(TAG, "Connection Request")
+        Log.d(TAG, "========================================")
+
+        if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "❌ Missing BLUETOOTH_CONNECT permission")
+            setStateAndBroadcast(STATE_DISCONNECTED)
+            updateNotification("Permission Denied", "Grant Bluetooth permission")
+            return
+        }
+
+        Log.d(TAG, "Device Name: ${device.name}")
+        Log.d(TAG, "Device Address: ${device.address}")
+        Log.d(TAG, "Device Type: ${device.type}")
+        Log.d(TAG, "Bond State: ${device.bondState}")
+
+        // Check if device is paired
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            Log.e(TAG, "❌ Device is not paired! Pair it in phone settings first.")
+            setStateAndBroadcast(STATE_DISCONNECTED)
+            updateNotification("Not Paired", "Pair ESP32 in Bluetooth settings")
+            return
+        }
+
+        Log.d(TAG, "✓ Device is paired")
+
+        // Cancel any ongoing discovery
+        try {
+            if (bluetoothAdapter?.isDiscovering == true) {
+                bluetoothAdapter?.cancelDiscovery()
+                Log.d(TAG, "✓ Discovery cancelled")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cancelling discovery: ${e.message}")
+        }
+
+        // Disconnect existing connection
         disconnect()
-        Thread.sleep(100)  // ← Added: Small delay
+
+        // Wait a bit before connecting
+        Thread.sleep(1000)
 
         setStateAndBroadcast(STATE_CONNECTING)
         updateNotification("Connecting...", "Connecting to ${device.name}")
 
         connectionThread = Thread {
-            try {
-                if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                    setStateAndBroadcast(STATE_DISCONNECTED)
-                    return@Thread
-                }
+            var attemptNumber = 1
+            var connected = false
 
-                val uuid = UUID.fromString(SPP_UUID)
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid)
-
+            while (attemptNumber <= 3 && !connected) {
                 try {
-                    bluetoothSocket?.connect()
-                } catch (e: IOException) {
-                    // ← Added: Fallback connection method
-                    try {
+                    Log.d(TAG, "\n--- Attempt $attemptNumber/3 ---")
+
+                    if (attemptNumber == 1) {
+                        // Method 1: Standard secure connection
+                        Log.d(TAG, "Trying standard secure RFCOMM...")
+                        val uuid = UUID.fromString(SPP_UUID)
+                        bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid)
+                    } else if (attemptNumber == 2) {
+                        // Method 2: Insecure connection
+                        Log.d(TAG, "Trying insecure RFCOMM...")
+                        val uuid = UUID.fromString(SPP_UUID)
+                        bluetoothSocket = device.createInsecureRfcommSocketToServiceRecord(uuid)
+                    } else {
+                        // Method 3: Fallback using reflection
+                        Log.d(TAG, "Trying fallback method (reflection)...")
                         val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-                        bluetoothSocket?.close()
                         bluetoothSocket = method.invoke(device, 1) as BluetoothSocket
-                        bluetoothSocket?.connect()
-                    } catch (e2: Exception) {
-                        throw e
                     }
+
+                    Log.d(TAG, "Socket created, connecting...")
+                    bluetoothSocket?.connect()
+
+                    Log.d(TAG, "✓✓✓ CONNECTED! ✓✓✓")
+                    connected = true
+
+                    outputStream = bluetoothSocket?.outputStream
+                    inputStream = bluetoothSocket?.inputStream
+
+                    Log.d(TAG, "✓ Streams obtained")
+
+                    setStateAndBroadcast(STATE_CONNECTED)
+                    updateNotification("Connected", "Connected to ${device.name}")
+
+                    // Start reading thread
+                    startReaderThread()
+
+                    // Send test message
+                    Thread.sleep(500)
+                    sendMessageNow("TEST:Connection established from Android")
+
+                    Log.d(TAG, "========================================")
+                    Log.d(TAG, "Connection successful!")
+                    Log.d(TAG, "========================================\n")
+
+                } catch (e: IOException) {
+                    Log.w(TAG, "Attempt $attemptNumber failed: ${e.message}")
+
+                    try {
+                        bluetoothSocket?.close()
+                    } catch (closeException: IOException) {
+                        Log.e(TAG, "Error closing socket: ${closeException.message}")
+                    }
+
+                    if (attemptNumber < 3) {
+                        Log.d(TAG, "Waiting 2 seconds before retry...")
+                        Thread.sleep(2000)
+                    }
+
+                    attemptNumber++
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unexpected error: ${e.message}", e)
+                    attemptNumber++
                 }
+            }
 
-                outputStream = bluetoothSocket?.outputStream
+            if (!connected) {
+                Log.e(TAG, "\n========================================")
+                Log.e(TAG, "❌ ALL CONNECTION ATTEMPTS FAILED")
+                Log.e(TAG, "========================================\n")
 
-                setStateAndBroadcast(STATE_CONNECTED)
-                updateNotification("Connected", "Connected to ${device.name}")
-
-            } catch (e: IOException) {
-                e.printStackTrace()
                 setStateAndBroadcast(STATE_DISCONNECTED)
-                updateNotification("Connection Failed", "Tap to retry")
+                updateNotification("Connection Failed", "Check ESP32 is powered on and paired")
             }
         }
         connectionThread?.start()
     }
 
+    private fun startReaderThread() {
+        readerThread = Thread {
+            val buffer = ByteArray(1024)
+            var bytes: Int
+
+            Log.d(TAG, "Reader thread started")
+
+            try {
+                while (currentState == STATE_CONNECTED && inputStream != null) {
+                    bytes = inputStream!!.read(buffer)
+                    if (bytes > 0) {
+                        val message = String(buffer, 0, bytes)
+                        Log.d(TAG, "📩 Received from ESP32: $message")
+                    }
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "Reader thread error: ${e.message}")
+                if (currentState == STATE_CONNECTED) {
+                    setStateAndBroadcast(STATE_DISCONNECTED)
+                    updateNotification("Disconnected", "Connection lost")
+                }
+            }
+
+            Log.d(TAG, "Reader thread stopped")
+        }
+        readerThread?.start()
+    }
+
     private fun disconnect() {
+        Log.d(TAG, "Disconnecting...")
+
+        connectionThread?.interrupt()
+        readerThread?.interrupt()
+
+        connectionThread = null
+        readerThread = null
+
         try {
+            inputStream?.close()
             outputStream?.close()
             bluetoothSocket?.close()
+            Log.d(TAG, "✓ Socket closed")
         } catch (e: IOException) {
-            e.printStackTrace()
+            Log.e(TAG, "Error closing socket: ${e.message}")
         }
+
+        inputStream = null
         outputStream = null
         bluetoothSocket = null
+
         setStateAndBroadcast(STATE_DISCONNECTED)
         updateNotification("Disconnected", "Tap to open app")
     }
 
     private fun setStateAndBroadcast(state: Int) {
+        val oldState = currentState
         currentState = state
+
+        val stateNames = mapOf(
+            STATE_DISCONNECTED to "DISCONNECTED",
+            STATE_CONNECTING to "CONNECTING",
+            STATE_CONNECTED to "CONNECTED"
+        )
+
+        Log.d(TAG, "State: ${stateNames[oldState]} → ${stateNames[state]}")
+
         val intent = Intent(ACTION_CONNECTION_STATE_CHANGED)
         intent.putExtra(EXTRA_STATE, state)
         sendBroadcast(intent)
@@ -155,6 +297,7 @@ class BluetoothService : Service() {
 
     private fun queueMessage(message: String) {
         messageQueue.offer(message)
+        Log.d(TAG, "📤 Message queued: $message")
     }
 
     private fun startMessageSender() {
@@ -166,7 +309,7 @@ class BluetoothService : Service() {
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.e(TAG, "Error in message sender: ${e.message}")
                 }
             }
         }.start()
@@ -178,11 +321,14 @@ class BluetoothService : Service() {
                 val data = "$message\n".toByteArray(Charsets.UTF_8)
                 outputStream?.write(data)
                 outputStream?.flush()
+                Log.d(TAG, "✓ Message sent: $message")
             } catch (e: IOException) {
-                e.printStackTrace()
+                Log.e(TAG, "Error sending message: ${e.message}")
                 setStateAndBroadcast(STATE_DISCONNECTED)
                 updateNotification("Disconnected", "Connection lost")
             }
+        } else {
+            Log.w(TAG, "Cannot send message - not connected (state: $currentState)")
         }
     }
 
@@ -228,5 +374,6 @@ class BluetoothService : Service() {
         super.onDestroy()
         instance = null
         disconnect()
+        Log.d(TAG, "BluetoothService destroyed")
     }
 }
